@@ -4,6 +4,7 @@ __date__ = "2018/11/07 17:37:59"
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
 import math
 import itertools
@@ -150,6 +151,68 @@ class mbar_loss(nn.Module):
         tmp = self.energy + self.bias
         loss = 1.0 / (self.num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*self.mask, -1))) + torch.sum(self.count*self.bias))
         return loss
+
+def calculate_free_energy_mbar(energy, count, mask):
+    ## calculate bias energies for states with nonzero samples by
+    ## optimizing the mbar loss functin with L-BFGS-B algorithm
+    ## use the L-BFGS-B algorithm avaiable in pytorch.optim
+
+    num_samples = energy.shape[0]
+    
+    ## mbar_loss object to calcualte loss and grad
+    loss_model = mbar_loss(energy, count, mask)
+    optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
+
+    ## calcualte loss and grad
+    previous_loss = loss_model()
+    previous_loss.backward()
+    previous_loss = previous_loss.item()
+    grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+
+    ## minimize loss using L-BFGS-B
+    print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
+    for i in range(100):
+        def closure():
+            optimizer.zero_grad()
+            loss = loss_model()
+            loss.backward()    
+            return loss
+        optimizer.step(closure)
+        loss = loss_model().item()
+        grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+        print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max))
+        ## stop criterion for L-BFGS-B
+        ## this is added because the optim.LBFGS often returns nan values
+        ## when it runs too many iterations.
+        if np.abs(loss-previous_loss) <= 1e-4 or grad_max <= 1e-4:
+            break
+        previous_loss = loss
+
+    ## using the bias energies to calculate free energies for states with
+    ## nonzero samples
+    bias = loss_model.bias.data
+    tmp = -torch.log(count/num_samples)*mask
+    tmp[torch.isnan(tmp)] = 0
+    F = tmp - bias
+
+    ## normalize free energyies of states with nonzero samples
+    prob = torch.exp(-F) * mask
+    prob = prob / prob.sum(-1, keepdim = True)
+    F_nz = - torch.log(prob)
+
+    ## update bias energy based on normalized F for states with
+    ## nonzero samples
+    bias = -torch.log(count/num_samples) - F
+    bias[torch.isnan(bias)] = 0
+
+    ## calculate free energies for all states using
+    ## importance sampling/Zwanzig equations
+    ## note that F agrees with F_nz for states with nonzero samples
+    biased_energy = energy + bias
+    tmp = torch.sum(torch.exp(-biased_energy)*mask, -1, keepdim = True)
+    F = -torch.log(torch.mean(torch.exp(-energy)/tmp, 0))
+
+    return F
     
 def mbar_loss_grad(bias, energy, count, mask):
     tmp = energy + bias

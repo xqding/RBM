@@ -15,8 +15,8 @@ from function import *
 sys.path.append("/home/xqding/course/projectsOnGitHub/FastMBAR/FastMBAR")
 from FastMBAR import *
 
-num_visible_units = 784
-num_hidden_units = 30
+num_visible_units = 40
+num_hidden_units = 20
 
 #torch.random.manual_seed(0)
 W = torch.randn((num_visible_units,
@@ -70,6 +70,11 @@ count = calculate_states_count(W, b_v, b_h, samples_v, samples_h)
 mask = (count != 0).float()
 count = count.float()
 
+F = calculate_free_energy_mbar(energy, count, mask)
+
+
+sys.exit()
+
 loss_model = mbar_loss(energy, count, mask)
 optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
 previous_loss = loss_model()
@@ -88,16 +93,34 @@ for i in range(100):
     loss = loss_model().item()
     grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
     print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max)) 
-    if np.abs(loss-previous_loss) <= 1e-4:
+    if np.abs(loss-previous_loss) <= 1e-4 or grad_max <= 1e-4:
         break
     previous_loss = loss
 
+bias = loss_model.bias.data
+tmp = -torch.log(count/num_samples)*mask
+tmp[torch.isnan(tmp)] = 0
+F = tmp - bias
+
+## normalize F
+prob = torch.exp(-F) * mask
+prob = prob / prob.sum(-1, keepdim = True)
+F = - torch.log(prob)
+bias = -torch.log(count/num_samples) - F
+bias[torch.isnan(bias)] = 0
+
+biased_energy = energy + bias
+tmp = torch.sum(torch.exp(-biased_energy)*mask, -1, keepdim = True)
+F = -torch.log(torch.mean(torch.exp(-energy)/tmp, 0))
+
+
+sys.exit()
+
 bias_init = np.random.randn(np.prod(list(count.shape)))
 num_samples = samples_v.shape[0]
-
 obj_np, grad_np = mbar_loss_grad_np(bias_init, energy, count, mask)
 x, f, d = optimize.fmin_l_bfgs_b(mbar_loss_grad_np, bias_init, iprint = 1, args = (energy, count, mask))
-sys.exit()
+
 
 prob_sample = torch.matmul(samples_v.t(), samples_h).float() / samples_h.shape[0]
 
