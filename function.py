@@ -310,7 +310,7 @@ def calculate_model_expectation_mbar(W, b_v, b_h, samples_v, samples_h):
 
             ## calculate free energies (negative log of partitioin function) of
             ## the four states using MBAR
-            mbar = FastMBAR(energy.numpy(), np.array(count), cuda = False)
+            mbar = FastMBAR(energy.cpu().numpy(), np.array(count), cuda = True)
             F, _ = mbar.calculate_free_energies(bootstrap = False)
             F = torch.from_numpy(F)
             

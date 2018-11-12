@@ -69,63 +69,15 @@ energy = energy - energy.min(-1, keepdim = True)[0]
 count = calculate_states_count(W, b_v, b_h, samples_v, samples_h)
 mask = (count != 0).float()
 count = count.float()
-
 F = calculate_free_energy_mbar(energy, count, mask)
 
-
-sys.exit()
-
-loss_model = mbar_loss(energy, count, mask)
-optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
-previous_loss = loss_model()
-previous_loss.backward()
-previous_loss = previous_loss.item()
-grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
-
-print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
-for i in range(100):
-    def closure():
-        optimizer.zero_grad()
-        loss = loss_model()
-        loss.backward()    
-        return loss
-    optimizer.step(closure)
-    loss = loss_model().item()
-    grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
-    print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max)) 
-    if np.abs(loss-previous_loss) <= 1e-4 or grad_max <= 1e-4:
-        break
-    previous_loss = loss
-
-bias = loss_model.bias.data
-tmp = -torch.log(count/num_samples)*mask
-tmp[torch.isnan(tmp)] = 0
-F = tmp - bias
-
-## normalize F
-prob = torch.exp(-F) * mask
-prob = prob / prob.sum(-1, keepdim = True)
-F = - torch.log(prob)
-bias = -torch.log(count/num_samples) - F
-bias[torch.isnan(bias)] = 0
-
-biased_energy = energy + bias
-tmp = torch.sum(torch.exp(-biased_energy)*mask, -1, keepdim = True)
-F = -torch.log(torch.mean(torch.exp(-energy)/tmp, 0))
-
-
-sys.exit()
-
-bias_init = np.random.randn(np.prod(list(count.shape)))
-num_samples = samples_v.shape[0]
-obj_np, grad_np = mbar_loss_grad_np(bias_init, energy, count, mask)
-x, f, d = optimize.fmin_l_bfgs_b(mbar_loss_grad_np, bias_init, iprint = 1, args = (energy, count, mask))
-
-
+samples_v = samples_v.float()
+samples_h = samples_h.float()
 prob_sample = torch.matmul(samples_v.t(), samples_h).float() / samples_h.shape[0]
-
 prob_cd_1 = torch.matmul(prob_v.view((-1,1)), h.view((1,-1)))
 prob_mbar = calculate_model_expectation_mbar(W, b_v, b_h, samples_v, samples_h)
+
+sys.exit()
 
 diff_sample = torch.mean(torch.abs(prob_sample - prob)).item()
 diff_cd_1 = torch.mean(torch.abs(prob_cd_1 - prob)).item()
@@ -181,3 +133,49 @@ Z = np.exp(-F)
 prob_mbar_ij = Z[-1] / np.sum(Z)
 
 sys.exit()
+
+
+loss_model = mbar_loss(energy, count, mask)
+optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
+previous_loss = loss_model()
+previous_loss.backward()
+previous_loss = previous_loss.item()
+grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+
+print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
+for i in range(100):
+    def closure():
+        optimizer.zero_grad()
+        loss = loss_model()
+        loss.backward()    
+        return loss
+    optimizer.step(closure)
+    loss = loss_model().item()
+    grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+    print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max)) 
+    if np.abs(loss-previous_loss) <= 1e-4 or grad_max <= 1e-4:
+        break
+    previous_loss = loss
+
+bias = loss_model.bias.data
+tmp = -torch.log(count/num_samples)*mask
+tmp[torch.isnan(tmp)] = 0
+F = tmp - bias
+
+## normalize F
+prob = torch.exp(-F) * mask
+prob = prob / prob.sum(-1, keepdim = True)
+F = - torch.log(prob)
+bias = -torch.log(count/num_samples) - F
+bias[torch.isnan(bias)] = 0
+
+biased_energy = energy + bias
+tmp = torch.sum(torch.exp(-biased_energy)*mask, -1, keepdim = True)
+F = -torch.log(torch.mean(torch.exp(-energy)/tmp, 0))
+
+sys.exit()
+
+bias_init = np.random.randn(np.prod(list(count.shape)))
+num_samples = samples_v.shape[0]
+obj_np, grad_np = mbar_loss_grad_np(bias_init, energy, count, mask)
+x, f, d = optimize.fmin_l_bfgs_b(mbar_loss_grad_np, bias_init, iprint = 1, args = (energy, count, mask))
