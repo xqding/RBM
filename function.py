@@ -92,6 +92,54 @@ def calculate_model_expectation_brute_force(W, b_v, b_h):
     
     return prob
 
+def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
+    ## make sure dimensions of parameters agree with each other
+    num_visible_units = len(b_v)
+    num_hidden_units = len(b_h)
+    assert(num_visible_units == W.shape[0])
+    assert(num_hidden_units == W.shape[1])
+    
+    num_samples = samples_v.shape[0]
+    assert(num_samples == samples_h.shape[0])
+    assert(samples_v.shape[1] == num_visible_units)
+    assert(samples_h.shape[1] == num_hidden_units)
+
+
+    ## expand samples of visible units
+    ## each sample of visible units is repeated by num_visible_units times.
+    ## the i'th position of the i'th repeated sample is set to 0 or 1
+    V = samples_v.repeat(1, num_visible_units).reshape(-1,num_visible_units,
+                                                       num_visible_units)        
+    V = V.float()
+    idx_v = torch.arange(0, num_visible_units, dtype = torch.long)
+
+    ## expand samples of hidden units (similar to samples of visible units)
+    ## each sample of hidden units is repeated by num_hidden_units times.
+    ## the i'th position of the i'th repeated sample is set to 0 or 1,
+    H = samples_h.repeat(1, num_hidden_units).reshape(-1,num_hidden_units,
+                                                       num_hidden_units)
+    H = H.float()
+    idx_h = torch.arange(0, num_hidden_units, dtype = torch.long)
+
+    ## calculate energy matrix
+    energy_list = []
+    for value_v in range(2):
+        for value_h in range(2):
+            print(value_v, value_h)
+            ## for each samples (v,h), set each pair of (v_i, h_j) to
+            ## four possible states ((0,0),(0,1),(1,0),(1,1))
+            ## and calculate energies
+            V[:, idx_v, idx_v] = value_v
+            H[:, idx_h, idx_h] = value_h
+            vb = torch.matmul(V, b_v).unsqueeze(-1)
+            hb = torch.matmul(H, b_h).unsqueeze(1)    
+            vWh = torch.matmul(torch.matmul(V, W), H.transpose(1,2))    
+            energy = - (vWh + vb + hb)
+            energy_list.append(energy)
+    return energy_list
+
+
+
 def calculate_model_expectation_mbar(W, b_v, b_h, samples_v, samples_h):
     '''
     calcualte the model expection of <v_i*h_j> using MBAR approach

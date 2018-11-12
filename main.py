@@ -12,8 +12,8 @@ from function import *
 sys.path.append("/home/xqding/course/projectsOnGitHub/FastMBAR/FastMBAR")
 from FastMBAR import *
 
-num_visible_units = 60
-num_hidden_units = 10
+num_visible_units = 784
+num_hidden_units = 50
 
 #torch.random.manual_seed(0)
 W = torch.randn((num_visible_units,
@@ -21,33 +21,36 @@ W = torch.randn((num_visible_units,
 b_v = torch.randn(num_visible_units)
 b_h = torch.randn(num_hidden_units)
 
-prob = calculate_model_expectation_brute_force(W, b_v, b_h)
+W = W.cuda()
+b_v = b_v.cuda()
+b_h = b_h.cuda()
 
-v = torch.randint(0, 2, (num_visible_units, ))
-burn_in_steps = 10000
+#prob = calculate_model_expectation_brute_force(W, b_v, b_h)
+v = torch.randint_like(b_v, 0, 2)
+burn_in_steps = 1000
 for i in range(burn_in_steps):
     energy_h = -(torch.matmul(W.t(), v) + b_h)
     prob_h = 1 / (1 + torch.exp(energy_h))
-    random_u = torch.rand(num_hidden_units)
+    random_u = torch.rand_like(prob_h)
     h = (random_u <= prob_h).float()
 
     energy_v = -(torch.matmul(W, h) + b_v)
     prob_v = 1 / (1 + torch.exp(energy_v))
-    random_u = torch.rand(num_visible_units)
+    random_u = torch.rand_like(prob_v)
     v = (random_u <= prob_v).float()
-        
-num_steps = 20
+
+num_steps = 200
 samples_v = []
 samples_h = []
 for i in range(num_steps):
     energy_h = -(torch.matmul(W.t(), v) + b_h)
     prob_h = 1 / (1 + torch.exp(energy_h))
-    random_u = torch.rand(num_hidden_units)
+    random_u = torch.rand_like(prob_h)
     h = (random_u <= prob_h).float()
 
     energy_v = -(torch.matmul(W, h) + b_v)
     prob_v = 1 / (1 + torch.exp(energy_v))
-    random_u = torch.rand(num_visible_units)
+    random_u = torch.rand_like(prob_v)
     v = (random_u <= prob_v).float()
 
     if i % 2 == 0:
@@ -56,6 +59,13 @@ for i in range(num_steps):
 
 samples_h = torch.stack(samples_h)
 samples_v = torch.stack(samples_v)
+print("calculate energy ...")
+energy = calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h)
+sys.exit()
+
+
+
+
 prob_sample = torch.matmul(samples_v.t(), samples_h).float() / samples_h.shape[0]
 
 prob_cd_1 = torch.matmul(prob_v.view((-1,1)), h.view((1,-1)))
@@ -72,8 +82,6 @@ angle_mbar = calculate_angle(prob_mbar.view(-1), prob.view(-1))
 print("diff_sample: {:.3f}, diff_cd_1: {:.3f}, diff_mbar: {:.3f}".format(diff_sample, diff_cd_1, diff_mbar))
 print("angle_sample: {:.3f}, angle_cd_1: {:.3f}, angle_mbar: {:.3f}".format(angle_sample, angle_cd_1, angle_mbar))
 
-
-sys.exit()
 
 i = 5
 j = 4
