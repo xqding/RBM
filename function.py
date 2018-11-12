@@ -56,41 +56,35 @@ def calculate_model_expectation_brute_force(W, b_v, b_h):
             new_b_h = new_b_h[idx_h]            
             logZ11 = calculate_log_partition_function(sub_W, new_b_v, new_b_h)    
             logZ11 += b_v[i] + b_h[j] + W[i,j]
-
             prob[i,j] = (torch.exp(logZ11-logZ)).item()
             
-            # ## v_i = 0, h_j = 0
-            # new_b_v = b_v + 0
-            # new_b_v = new_b_v[idx_v]
-            # new_b_h = b_h + 0
-            # new_b_h = new_b_h[idx_h]        
-            # logZ00 = calculate_log_partition_function(sub_W, new_b_v, new_b_h)
-
-            # ## v_i = 0, h_j = 1
-            # new_b_v = b_v + W[:, j]
-            # new_b_v = new_b_v[idx_v]    
-            # new_b_h = b_h + 0
-            # new_b_h = new_b_h[idx_h]            
-            # logZ01 = calculate_log_partition_function(sub_W, new_b_v, new_b_h)
-            # logZ01 += b_h[j]
-
-            # ## v_i = 1, h_j = 0
-            # new_b_v = b_v + 0
-            # new_b_v = new_b_v[idx_v]    
-            # new_b_h = b_h + W[i, :]
-            # new_b_h = new_b_h[idx_h]    
-            # logZ10 = calculate_log_partition_function(sub_W, new_b_v, new_b_h)
-            # logZ10 += b_v[i]
-
-
-            # tmp_logZ = torch.tensor((logZ00, logZ01, logZ10, logZ11))
-            # tmp_logZ_max = torch.max(tmp_logZ)
-            # tmp_logZ = tmp_logZ - tmp_logZ_max
-            # logZZ = torch.log(torch.sum(torch.exp(tmp_logZ))) + tmp_logZ_max
-            # diff = (logZ - logZZ).item()
-            # assert(diff <= 1e-4)
-    
     return prob
+
+def calculate_states_count(W, b_v, b_h, samples_v, samples_h):
+    ## make sure dimensions of parameters agree with each other
+    num_visible_units = len(b_v)
+    num_hidden_units = len(b_h)
+    assert(num_visible_units == W.shape[0])
+    assert(num_hidden_units == W.shape[1])
+    
+    num_samples = samples_v.shape[0]
+    assert(num_samples == samples_h.shape[0])
+    assert(samples_v.shape[1] == num_visible_units)
+    assert(samples_h.shape[1] == num_hidden_units)
+
+    samples_v = samples_v.view(num_samples, num_visible_units, 1)
+    samples_h = samples_h.view(num_samples, 1, num_hidden_units)
+
+    count = []
+    for value_v in range(2):
+        tmp_v = samples_v == value_v        
+        for value_h in range(2):
+            tmp_h = samples_h == value_h
+            tmp = tmp_v * tmp_h
+            count.append(tmp)
+    count = torch.stack(count, -1)
+    count = count.sum(0)
+    return count
 
 def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
     ## make sure dimensions of parameters agree with each other
@@ -122,10 +116,9 @@ def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
     idx_h = torch.arange(0, num_hidden_units, dtype = torch.long)
 
     ## calculate energy matrix
-    energy_list = []
+    energy = []
     for value_v in range(2):
         for value_h in range(2):
-            print(value_v, value_h)
             ## for each samples (v,h), set each pair of (v_i, h_j) to
             ## four possible states ((0,0),(0,1),(1,0),(1,1))
             ## and calculate energies
@@ -134,10 +127,53 @@ def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
             vb = torch.matmul(V, b_v).unsqueeze(-1)
             hb = torch.matmul(H, b_h).unsqueeze(1)    
             vWh = torch.matmul(torch.matmul(V, W), H.transpose(1,2))    
-            energy = - (vWh + vb + hb)
-            energy_list.append(energy)
-    return energy_list
+            tmp_energy = - (vWh + vb + hb)
+            energy.append(tmp_energy)
+    energy = torch.stack(energy, -1)
+    return energy
 
+class mbar_loss(nn.Module):
+    def __init__(self, energy, count, mask):
+        super(mbar_loss, self).__init__()
+        self.energy = energy
+        self.num_samples = energy.shape[0]
+        self.count = count
+        self.mask = mask
+        tmp  = torch.randn(count.size(), dtype = energy.dtype,
+                                device = energy.device)
+        tmp = tmp * self.mask        
+        self.bias = nn.Parameter(torch.tensor(tmp, device = energy.device,
+                                              requires_grad = True))
+
+        
+    def forward(self):
+        tmp = self.energy + self.bias
+        loss = 1.0 / (self.num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*self.mask, -1))) + torch.sum(self.count*self.bias))
+        return loss
+    
+def mbar_loss_grad(bias, energy, count, mask):
+    tmp = energy + bias
+    num_samples = energy.shape[0]
+    loss = 1.0 / (num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*mask, -1))) + torch.sum(count*bias))
+    grad = 1.0 / (num_samples) * (-torch.sum((torch.exp(-tmp)*mask)/torch.sum(torch.exp(-tmp)*mask,-1,keepdim = True), 0) + count)
+    return loss, grad
+
+def mbar_loss_grad_np(bias, energy, count, mask):
+    num_samples = energy.shape[0]
+    
+    bias = torch.tensor(bias, dtype = energy.dtype, device = energy.device)
+    bias = bias.reshape(count.size())
+    tmp = energy + bias
+
+    # obj = 1.0 / (torch.sum(count)) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*mask, -1))) + torch.sum(count * bias))
+    # grad = 1.0 / (torch.sum(count)) * ( - torch.sum((torch.exp(-tmp)*mask)/torch.sum(torch.exp(-tmp)*mask, -1, keepdim = True), 0) + count)
+    
+    obj = 1.0 / (num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*mask, -1))) + torch.sum(count * bias))
+    grad = 1.0 / (num_samples) * ( - torch.sum((torch.exp(-tmp)*mask)/torch.sum(torch.exp(-tmp)*mask, -1, keepdim = True), 0) + count)
+
+    obj = obj.cpu().item()
+    grad = grad.cpu().numpy().reshape(-1)
+    return obj, grad.astype(np.float64)    
 
 
 def calculate_model_expectation_mbar(W, b_v, b_h, samples_v, samples_h):

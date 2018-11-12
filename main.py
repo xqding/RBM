@@ -4,7 +4,10 @@ __date__ = "2018/11/07 17:37:59"
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
+import numpy as np
+import scipy.optimize as optimize
 import itertools
 import sys
 from function import *
@@ -13,7 +16,7 @@ sys.path.append("/home/xqding/course/projectsOnGitHub/FastMBAR/FastMBAR")
 from FastMBAR import *
 
 num_visible_units = 784
-num_hidden_units = 50
+num_hidden_units = 30
 
 #torch.random.manual_seed(0)
 W = torch.randn((num_visible_units,
@@ -59,12 +62,42 @@ for i in range(num_steps):
 
 samples_h = torch.stack(samples_h)
 samples_v = torch.stack(samples_v)
+num_samples = samples_v.shape[0]
 print("calculate energy ...")
 energy = calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h)
+energy = energy - energy.min(-1, keepdim = True)[0]
+count = calculate_states_count(W, b_v, b_h, samples_v, samples_h)
+mask = (count != 0).float()
+count = count.float()
+
+loss_model = mbar_loss(energy, count, mask)
+optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
+previous_loss = loss_model()
+previous_loss.backward()
+previous_loss = previous_loss.item()
+grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+
+print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
+for i in range(100):
+    def closure():
+        optimizer.zero_grad()
+        loss = loss_model()
+        loss.backward()    
+        return loss
+    optimizer.step(closure)
+    loss = loss_model().item()
+    grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
+    print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max)) 
+    if np.abs(loss-previous_loss) <= 1e-4:
+        break
+    previous_loss = loss
+
+bias_init = np.random.randn(np.prod(list(count.shape)))
+num_samples = samples_v.shape[0]
+
+obj_np, grad_np = mbar_loss_grad_np(bias_init, energy, count, mask)
+x, f, d = optimize.fmin_l_bfgs_b(mbar_loss_grad_np, bias_init, iprint = 1, args = (energy, count, mask))
 sys.exit()
-
-
-
 
 prob_sample = torch.matmul(samples_v.t(), samples_h).float() / samples_h.shape[0]
 
