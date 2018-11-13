@@ -1,96 +1,107 @@
 __author__ = "Xinqiang Ding <xqding@umich.edu>"
-__date__ = "2018/11/07 17:37:59"
+__date__ = "2018/11/13 01:07:42"
+
+import numpy as np
+import scipy.optimize as optimize
+import itertools
+import sys
+import pickle
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-import numpy as np
-import scipy.optimize as optimize
-import itertools
-import sys
 from function import *
 
-sys.path.append("/home/xqding/course/projectsOnGitHub/FastMBAR/FastMBAR")
-from FastMBAR import *
+with open("./data/data.pkl", 'rb') as file_handle:
+    data = pickle.load(file_handle)
 
 num_visible_units = 784
-num_hidden_units = 100
+num_hidden_units = 30
 
-#torch.random.manual_seed(0)
 W = torch.randn((num_visible_units,
-                 num_hidden_units))
-b_v = torch.randn(num_visible_units)
-b_h = torch.randn(num_hidden_units)
+                 num_hidden_units), requires_grad = True, device = 'cuda')
+b_v = torch.zeros(num_visible_units, dtype = W.dtype,
+                  device = W.device, requires_grad = True)
+b_h = torch.zeros(num_hidden_units, dtype = W.dtype,
+                  device = W.device, requires_grad = True)
 
-W = W.cuda()
-b_v = b_v.cuda()
-b_h = b_h.cuda()
+num_particles = 100
+V = torch.randint(high = 2, size = (num_particles, num_visible_units),
+                  dtype = b_v.dtype, device = b_v.device)
 
-#prob = calculate_model_expectation_brute_force(W, b_v, b_h)
-v = torch.randint_like(b_v, 0, 2)
+def V2H(V):
+    energy = -(torch.matmul(V, W) + b_h)
+    prob = 1.0 / (1 + torch.exp(energy))
+    random_u = torch.rand_like(prob)
+    H = (random_u <= prob).float()
+    return H
+
+def V2P(V):
+    energy = -(torch.matmul(V, W) + b_h)
+    prob = 1.0 / (1 + torch.exp(energy))
+    return prob
+
+def H2V(H):
+    energy = -(torch.matmul(H, W.t()) + b_v)
+    prob = 1.0 / (1 + torch.exp(energy))
+    random_u = torch.rand_like(prob)
+    V = (random_u <= prob).float()
+    return V
+
 burn_in_steps = 1000
 for i in range(burn_in_steps):
-    energy_h = -(torch.matmul(W.t(), v) + b_h)
-    prob_h = 1 / (1 + torch.exp(energy_h))
-    random_u = torch.rand_like(prob_h)
-    h = (random_u <= prob_h).float()
+    H = V2H(V)
+    V = H2V(H)
+ 
+optimizer = optim.Adam([W, b_v, b_h])
 
-    energy_v = -(torch.matmul(W, h) + b_v)
-    prob_v = 1 / (1 + torch.exp(energy_v))
-    random_u = torch.rand_like(prob_v)
-    v = (random_u <= prob_v).float()
+train_image = data['train_image']
+batch_size = 100
 
-num_steps = 200
-samples_v = []
-samples_h = []
-for i in range(num_steps):
-    energy_h = -(torch.matmul(W.t(), v) + b_h)
-    prob_h = 1 / (1 + torch.exp(energy_h))
-    random_u = torch.rand_like(prob_h)
-    h = (random_u <= prob_h).float()
+for i in range(60):
+    print("batch {:>4d}".format(i))
+    ## get a batch of data
+    data_V = train_image[i*batch_size:(i+1)*batch_size, :]
+    data_V = torch.tensor(data_V, dtype = W.dtype, device = W.device)
 
-    energy_v = -(torch.matmul(W, h) + b_v)
-    prob_v = 1 / (1 + torch.exp(energy_v))
-    random_u = torch.rand_like(prob_v)
-    v = (random_u <= prob_v).float()
+    ## calculate data expectation
+    P = V2P(data_V)
+    grad_W_data = torch.matmul(data_V.t(), P) / batch_size
+    grad_b_v_data = torch.mean(data_V, 0)
+    grad_b_h_data = torch.mean(P,0)
 
-    if i % 2 == 0:
-        samples_h.append(h.int())
-        samples_v.append(v.int())
+    ## updates particles with Gibbs sampling
+    samples_V = []
+    samples_H = []
+    for i in range(10):
+        V = H2V(H)
+        H = V2H(V)
+        if i % 2 == 0:
+            samples_V.append(V)
+            samples_H.append(H)
+    samples_V = torch.cat(samples_V)
+    samples_H = torch.cat(samples_H)
+    num_samples = samples_V.shape[0]
 
-samples_h = torch.stack(samples_h)
-samples_v = torch.stack(samples_v)
-num_samples = samples_v.shape[0]
-print("calculate energy ...")
-energy = calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h)
-energy = energy - energy.min(-1, keepdim = True)[0]
-count = calculate_states_count(W, b_v, b_h, samples_v, samples_h)
-mask = (count != 0).float()
-count = count.float()
-print("calculate model expectation")
-F = calculate_free_energy_mbar(energy, count, mask)
-sys.exit()
+    ## calculate model expectation
+    energy = calculate_energy_matrix(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
+    energy = energy - energy.min(-1, keepdim = True)[0]
+    count = calculate_states_count(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
+    mask = (count != 0).float()
+    count = count.float()
+    F = calculate_free_energy_mbar(energy, count, mask)
 
-samples_v = samples_v.float()
-samples_h = samples_h.float()
-prob_sample = torch.matmul(samples_v.t(), samples_h).float() / samples_h.shape[0]
-prob_cd_1 = torch.matmul(prob_v.view((-1,1)), h.view((1,-1)))
-prob_mbar = calculate_model_expectation_mbar(W, b_v, b_h, samples_v, samples_h)
+    prob = torch.exp(-F)
+    grad_W_model = prob[:,:,3] / prob.sum(-1)
+    grad_b_v_model = samples_V.mean(0)
+    grad_b_h_model = samples_H.mean(0)
 
+    ## combined data expectation and model expectation to calculate gradients
+    W.grad = -(grad_W_data - grad_W_model)
+    b_v.grad = -(grad_b_v_data - grad_b_v_model)
+    b_h.grad = -(grad_b_h_data - grad_b_h_model)
 
-
-diff_sample = torch.mean(torch.abs(prob_sample - prob)).item()
-diff_cd_1 = torch.mean(torch.abs(prob_cd_1 - prob)).item()
-diff_mbar = torch.mean(torch.abs(prob_mbar - prob)).item()
-
-angle_sample = calculate_angle(prob_sample.view(-1), prob.view(-1))
-angle_cd_1 = calculate_angle(prob_cd_1.view(-1), prob.view(-1))
-angle_mbar = calculate_angle(prob_mbar.view(-1), prob.view(-1))
-
-print("diff_sample: {:.3f}, diff_cd_1: {:.3f}, diff_mbar: {:.3f}".format(diff_sample, diff_cd_1, diff_mbar))
-print("angle_sample: {:.3f}, angle_cd_1: {:.3f}, angle_mbar: {:.3f}".format(angle_sample, angle_cd_1, angle_mbar))
-
-
-sys.exit()
+    optimizer.step()

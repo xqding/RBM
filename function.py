@@ -146,7 +146,7 @@ class mbar_loss(nn.Module):
         self.bias = nn.Parameter(torch.tensor(tmp, device = energy.device,
                                               requires_grad = True))
 
-        
+    
     def forward(self):
         tmp = self.energy + self.bias
         loss = 1.0 / (self.num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*self.mask, -1))) + torch.sum(self.count*self.bias))
@@ -184,7 +184,7 @@ def calculate_free_energy_mbar(energy, count, mask):
         ## stop criterion for L-BFGS-B
         ## this is added because the optim.LBFGS often returns nan values
         ## when it runs too many iterations.
-        if np.abs(loss-previous_loss) <= 1e-4 or grad_max <= 1e-4:
+        if np.abs(loss-previous_loss) <= 1e-3 or grad_max <= 1e-3:
             break
         previous_loss = loss
 
