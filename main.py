@@ -19,10 +19,12 @@ with open("./data/data.pkl", 'rb') as file_handle:
     data = pickle.load(file_handle)
 
 num_visible_units = 784
-num_hidden_units = 30
+num_hidden_units = 25
 
 W = torch.randn((num_visible_units,
-                 num_hidden_units), requires_grad = True, device = 'cuda')
+                 num_hidden_units))
+W = W * 0.2
+W = torch.tensor(W, requires_grad = True, device = 'cuda')
 b_v = torch.zeros(num_visible_units, dtype = W.dtype,
                   device = W.device, requires_grad = True)
 b_h = torch.zeros(num_hidden_units, dtype = W.dtype,
@@ -56,18 +58,23 @@ for i in range(burn_in_steps):
     H = V2H(V)
     V = H2V(H)
  
-optimizer = optim.Adam([W, b_v, b_h])
+optimizer = optim.Adam([W, b_v, b_h], lr = 0.01)
 
 train_image = data['train_image']
-batch_size = 100
+batch_size = num_particles
 
-bias = None
+bias_vh = None
+bias_v = None
+bias_h = None
+
 for i in range(10):
     print("batch {:>4d}".format(i))
     ## get a batch of data
     data_V = train_image[i*batch_size:(i+1)*batch_size, :]
     data_V = torch.tensor(data_V, dtype = W.dtype, device = W.device)
-
+    random = torch.rand_like(data_V)
+    data_V = (random <= data_V).float()
+    
     ## calculate data expectation
     P = V2P(data_V)
     grad_W_data = torch.matmul(data_V.t(), P) / batch_size
@@ -77,28 +84,40 @@ for i in range(10):
     ## updates particles with Gibbs sampling
     samples_V = []
     samples_H = []
-    for i in range(10):
+    for i in range(100):
         V = H2V(H)
         H = V2H(V)
-        if i % 2 == 0:
+        if i % 20 == 0:
             samples_V.append(V)
             samples_H.append(H)
     samples_V = torch.cat(samples_V)
     samples_H = torch.cat(samples_H)
     num_samples = samples_V.shape[0]
 
-    ## calculate model expectation
-    energy = calculate_energy_matrix(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
-    energy = energy - energy.min(-1, keepdim = True)[0]
-    count = calculate_states_count(samples_V, samples_H)
-    mask = (count != 0).float()
-    count = count.float()
-    F, bias = calculate_free_energy_mbar(energy, count, mask, bias)
+    ## calculate model expectation for v_i*h_j
+    energy_vh = calculate_energy_matrix_pair(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
+    energy_vh = energy_vh - energy_vh.min(-1, keepdim = True)[0]
+    count_vh = calculate_states_count_pair(samples_V, samples_H)
+    mask_vh = (count_vh != 0).float()
+    count_vh = count_vh.float()
+    F_vh, bias_vh = calculate_free_energy_mbar(energy_vh, count_vh, mask_vh, bias_vh)
 
-    prob = torch.exp(-F)
-    grad_W_model = prob[:,:,3] / prob.sum(-1)
-    grad_b_v_model = samples_V.mean(0)
-    grad_b_h_model = samples_H.mean(0)
+    prob_vh = torch.exp(-F_vh)
+    grad_W_model = prob_vh[:,:,3] / prob_vh.sum(-1)
+
+    ## calculate model expectation for v_i/h_j
+    energy_v, energy_h = calculate_energy_matrix_single(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
+    energy_v = energy_v - energy_v.min(-1, keepdim = True)[0]
+    energy_h = energy_h - energy_h.min(-1, keepdim = True)[0]
+    
+    count_v, count_h = calculate_states_count_single(samples_V, samples_H)
+    mask_v, mask_h = (count_v != 0).float(), (count_h != 0).float()
+    count_v, count_h = count_v.float(), count_h.float()
+    F_v, bias_v = calculate_free_energy_mbar(energy_v, count_v, mask_v, bias_v)
+    F_h, bias_h = calculate_free_energy_mbar(energy_h, count_h, mask_h, bias_h)    
+
+    prob_v, prob_h = torch.exp(-F_v), torch.exp(-F_h)
+    grad_b_v_model,grad_b_h_model = prob_v[:,1]/prob_v.sum(-1), prob_h[:,1]/prob_h.sum(-1)
 
     ## combined data expectation and model expectation to calculate gradients
     W.grad = -(grad_W_data - grad_W_model)

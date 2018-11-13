@@ -192,7 +192,7 @@ def calculate_free_energy_mbar(energy, count, mask, bias = None):
     
     ## mbar_loss object to calcualte loss and grad
     loss_model = mbar_loss(energy, count, mask, bias)
-    optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
+    optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-4)
 
     ## calcualte loss and grad
     previous_loss = loss_model()
@@ -202,7 +202,7 @@ def calculate_free_energy_mbar(energy, count, mask, bias = None):
 
     ## minimize loss using L-BFGS-B
     print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
-    for i in range(100):
+    for i in range(30):
         def closure():
             optimizer.zero_grad()
             loss = loss_model()
