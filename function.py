@@ -61,7 +61,17 @@ def calculate_model_expectation_brute_force(W, b_v, b_h):
             
     return prob
 
-def calculate_states_count(W, b_v, b_h, samples_v, samples_h):
+def calculate_states_count_single(samples_v, samples_h):
+    count_v = []
+    count_h = []
+    for value in range(2):
+        count_v.append(torch.sum(samples_v == value, 0))
+        count_h.append(torch.sum(samples_h == value, 0))
+    count_v = torch.stack(count_v, -1)
+    count_h = torch.stack(count_h, -1)    
+    return count_v, count_h
+
+def calculate_energy_matrix_single(W, b_v, b_h, samples_v, samples_h):
     ## make sure dimensions of parameters agree with each other
     num_visible_units = len(b_v)
     num_hidden_units = len(b_h)
@@ -72,6 +82,23 @@ def calculate_states_count(W, b_v, b_h, samples_v, samples_h):
     assert(num_samples == samples_h.shape[0])
     assert(samples_v.shape[1] == num_visible_units)
     assert(samples_h.shape[1] == num_hidden_units)
+
+    energy_matrix_v = -(torch.matmul(samples_h.float(), W.t()) + b_v)
+    tmp = torch.zeros_like(energy_matrix_v)
+    energy_matrix_v = torch.stack([tmp, energy_matrix_v], -1)
+
+    energy_matrix_h = -(torch.matmul(samples_v.float(), W) + b_h)
+    tmp = torch.zeros_like(energy_matrix_h)
+    energy_matrix_h = torch.stack([tmp, energy_matrix_h], -1)
+
+    return energy_matrix_v, energy_matrix_h
+    
+def calculate_states_count_pair(samples_v, samples_h):
+    ## make sure dimensions of parameters agree with each other
+    num_visible_units = samples_v.shape[1]
+    num_hidden_units = samples_h.shape[1]
+    num_samples = samples_v.shape[0]
+    assert(num_samples == samples_h.shape[0])
 
     samples_v = samples_v.view(num_samples, num_visible_units, 1)
     samples_h = samples_h.view(num_samples, 1, num_hidden_units)
@@ -87,7 +114,7 @@ def calculate_states_count(W, b_v, b_h, samples_v, samples_h):
     count = count.sum(0)
     return count
 
-def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
+def calculate_energy_matrix_pair(W, b_v, b_h, samples_v, samples_h):
     ## make sure dimensions of parameters agree with each other
     num_visible_units = len(b_v)
     num_hidden_units = len(b_h)
@@ -134,25 +161,29 @@ def calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h):
     return energy
 
 class mbar_loss(nn.Module):
-    def __init__(self, energy, count, mask):
+    def __init__(self, energy, count, mask, bias = None):
         super(mbar_loss, self).__init__()
         self.energy = energy
         self.num_samples = energy.shape[0]
         self.count = count
         self.mask = mask
-        tmp  = torch.randn(count.size(), dtype = energy.dtype,
-                                device = energy.device)
-        tmp = tmp * self.mask        
-        self.bias = nn.Parameter(torch.tensor(tmp, device = energy.device,
-                                              requires_grad = True))
 
+        if bias is None:
+            bias  = torch.randn(count.size(), dtype = energy.dtype,
+                               device = energy.device, requires_grad = True)
+            bias.data = bias.data * self.mask
+            self.bias = nn.Parameter(bias)            
+        else:
+            bias = torch.tensor(bias, device = energy.device, requires_grad = True)
+            bias.data = bias.data * self.mask
+            self.bias = nn.Parameter(bias)            
     
     def forward(self):
         tmp = self.energy + self.bias
         loss = 1.0 / (self.num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*self.mask, -1))) + torch.sum(self.count*self.bias))
         return loss
 
-def calculate_free_energy_mbar(energy, count, mask):
+def calculate_free_energy_mbar(energy, count, mask, bias = None):
     ## calculate bias energies for states with nonzero samples by
     ## optimizing the mbar loss functin with L-BFGS-B algorithm
     ## use the L-BFGS-B algorithm avaiable in pytorch.optim
@@ -160,7 +191,7 @@ def calculate_free_energy_mbar(energy, count, mask):
     num_samples = energy.shape[0]
     
     ## mbar_loss object to calcualte loss and grad
-    loss_model = mbar_loss(energy, count, mask)
+    loss_model = mbar_loss(energy, count, mask, bias)
     optimizer = optim.LBFGS(loss_model.parameters(), max_iter = 10, tolerance_change=1e-5)
 
     ## calcualte loss and grad
@@ -202,7 +233,7 @@ def calculate_free_energy_mbar(energy, count, mask):
 
     ## update bias energy based on normalized F for states with
     ## nonzero samples
-    bias = -torch.log(count/num_samples) - F
+    bias = -torch.log(count/num_samples) - F_nz
     bias[torch.isnan(bias)] = 0
 
     ## calculate free energies for all states using
@@ -212,7 +243,8 @@ def calculate_free_energy_mbar(energy, count, mask):
     tmp = torch.sum(torch.exp(-biased_energy)*mask, -1, keepdim = True)
     F = -torch.log(torch.mean(torch.exp(-energy)/tmp, 0))
 
-    return F
+    bias[bias == float('inf')] = 0    
+    return F, bias
     
 def mbar_loss_grad(bias, energy, count, mask):
     tmp = energy + bias

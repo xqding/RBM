@@ -61,7 +61,8 @@ optimizer = optim.Adam([W, b_v, b_h])
 train_image = data['train_image']
 batch_size = 100
 
-for i in range(60):
+bias = None
+for i in range(10):
     print("batch {:>4d}".format(i))
     ## get a batch of data
     data_V = train_image[i*batch_size:(i+1)*batch_size, :]
@@ -89,10 +90,10 @@ for i in range(60):
     ## calculate model expectation
     energy = calculate_energy_matrix(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
     energy = energy - energy.min(-1, keepdim = True)[0]
-    count = calculate_states_count(W.detach(), b_v.detach(), b_h.detach(), samples_V, samples_H)
+    count = calculate_states_count(samples_V, samples_H)
     mask = (count != 0).float()
     count = count.float()
-    F = calculate_free_energy_mbar(energy, count, mask)
+    F, bias = calculate_free_energy_mbar(energy, count, mask, bias)
 
     prob = torch.exp(-F)
     grad_W_model = prob[:,:,3] / prob.sum(-1)

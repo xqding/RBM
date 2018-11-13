@@ -15,8 +15,8 @@ from function import *
 sys.path.append("/home/xqding/course/projectsOnGitHub/FastMBAR/FastMBAR")
 from FastMBAR import *
 
-num_visible_units = 784
-num_hidden_units = 100
+num_visible_units = 78
+num_hidden_units = 12
 
 #torch.random.manual_seed(0)
 W = torch.randn((num_visible_units,
@@ -64,13 +64,25 @@ samples_h = torch.stack(samples_h)
 samples_v = torch.stack(samples_v)
 num_samples = samples_v.shape[0]
 print("calculate energy ...")
-energy = calculate_energy_matrix(W, b_v, b_h, samples_v, samples_h)
+energy = calculate_energy_matrix_pair(W, b_v, b_h, samples_v, samples_h)
 energy = energy - energy.min(-1, keepdim = True)[0]
-count = calculate_states_count(W, b_v, b_h, samples_v, samples_h)
+count = calculate_states_count_pair(samples_v, samples_h)
 mask = (count != 0).float()
 count = count.float()
 print("calculate model expectation")
-F = calculate_free_energy_mbar(energy, count, mask)
+F,bias = calculate_free_energy_mbar(energy, count, mask)
+
+count_v, count_h = calculate_states_count_single(samples_v, samples_h)
+energy_v, energy_h = calculate_energy_matrix_single(W, b_v, b_h, samples_v, samples_h)
+
+mask_v = (count_v != 0).float()
+count_v = count_v.float()
+F_v, bias_v = calculate_free_energy_mbar(energy_v, count_v, mask_v)
+
+mask_h = (count_h != 0).float()
+count_h = count_h.float()
+F_h, bias_h = calculate_free_energy_mbar(energy_h, count_h, mask_h)
+
 sys.exit()
 
 samples_v = samples_v.float()
