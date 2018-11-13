@@ -18,20 +18,41 @@ def calculate_log_partition_function(W, b_v, b_h):
     assert(tuple(W.shape) == (num_visible_units, num_hidden_units))
 
     ## enumerate possible values of hidden units
-    h_values = [i for i in itertools.product(range(2), repeat = num_hidden_units)]
-    h_values = torch.FloatTensor(h_values)
+    h_values_cpu = [i for i in itertools.product(range(2), repeat = num_hidden_units)]
 
-    ## given each possible value of hidden unit, visible units are independent.
-    ## therefore the partition function is equal to the product of individual
-    ## partition function.
-    energy_v = -(torch.matmul(h_values, W.t()) + b_v)
-    logZ_h = torch.matmul(h_values, b_h) + torch.sum(torch.log(1 + torch.exp(-energy_v)), -1)
+    num_batch = 10
+    batch_size = len(h_values_cpu)//10 + 1
+    logZ_h_list = []
+    for i in range(num_batch):
+        h_values = torch.tensor(h_values_cpu[i*batch_size:(i+1)*batch_size],
+                                dtype = W.dtype, device = W.device)
 
+        ## given each possible value of hidden unit, visible units are independent.
+        ## therefore the partition function is equal to the product of individual
+        ## partition function.
+        energy_v = -(torch.matmul(h_values, W.t()) + b_v)
+        logZ_h = torch.matmul(h_values, b_h) + torch.sum(torch.log(1 + torch.exp(-energy_v)), -1)
+        logZ_h_list.append(logZ_h.cpu())
+        
     ## make the operation stable by substrating the maximum value
+    logZ_h = torch.cat(logZ_h_list)
     tmp = torch.max(logZ_h)
     logZ_h = logZ_h - tmp
     logZ = torch.log(torch.sum(torch.exp(logZ_h))) + tmp    
     return logZ
+
+def calculate_log_partition_function_samples(W, b_v, b_h, samples_v):
+    num_hidden_units = len(b_h)
+    num_visible_units = len(b_v)
+    assert(num_visible_units == W.shape[0])
+    assert(num_hidden_units == W.shape[1])    
+    num_samples = samples_v.shape[0]
+    
+    energy_h = -(torch.matmul(samples_v, W) + b_h)
+    logZ_v = torch.matmul(samples_v, b_v) + torch.sum(torch.log(1 + torch.exp(-energy_h)), -1)
+
+    return torch.mean(logZ_v).item()
+
 
 def calculate_model_expectation_brute_force(W, b_v, b_h):
     num_visible_units = len(b_v)    

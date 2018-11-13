@@ -19,7 +19,7 @@ with open("./data/data.pkl", 'rb') as file_handle:
     data = pickle.load(file_handle)
 
 num_visible_units = 784
-num_hidden_units = 25
+num_hidden_units = 20
 
 W = torch.randn((num_visible_units,
                  num_hidden_units))
@@ -30,7 +30,7 @@ b_v = torch.zeros(num_visible_units, dtype = W.dtype,
 b_h = torch.zeros(num_hidden_units, dtype = W.dtype,
                   device = W.device, requires_grad = True)
 
-num_particles = 100
+num_particles = 200
 V = torch.randint(high = 2, size = (num_particles, num_visible_units),
                   dtype = b_v.dtype, device = b_v.device)
 
@@ -58,16 +58,18 @@ for i in range(burn_in_steps):
     H = V2H(V)
     V = H2V(H)
  
-optimizer = optim.Adam([W, b_v, b_h], lr = 0.01)
+optimizer = optim.Adam([W, b_v, b_h], lr = 0.001)
 
 train_image = data['train_image']
+test_image = data['test_image']
+test_image = torch.tensor(test_image, dtype = W.dtype, device = W.device)
 batch_size = num_particles
 
 bias_vh = None
 bias_v = None
 bias_h = None
 
-for i in range(10):
+for i in range(20):
     print("batch {:>4d}".format(i))
     ## get a batch of data
     data_V = train_image[i*batch_size:(i+1)*batch_size, :]
@@ -125,3 +127,9 @@ for i in range(10):
     b_h.grad = -(grad_b_h_data - grad_b_h_model)
 
     optimizer.step()
+
+    logZ_v = calculate_log_partition_function_samples(W.detach(), b_v.detach(),
+                                                      b_h.detach(), test_image)
+    logZ = calculate_log_partition_function(W.detach(), b_v.detach(), b_h.detach())
+
+    print("log probability of test image: {:>7.3f}".format(logZ_v - logZ))
