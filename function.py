@@ -204,7 +204,7 @@ class mbar_loss(nn.Module):
         loss = 1.0 / (self.num_samples) * (torch.sum(torch.log(torch.sum(torch.exp(-tmp)*self.mask, -1))) + torch.sum(self.count*self.bias))
         return loss
 
-def calculate_free_energy_mbar(energy, count, mask, bias = None):
+def calculate_free_energy_mbar(energy, count, mask, bias = None, verbose = False):
     ## calculate bias energies for states with nonzero samples by
     ## optimizing the mbar loss functin with L-BFGS-B algorithm
     ## use the L-BFGS-B algorithm avaiable in pytorch.optim
@@ -222,7 +222,8 @@ def calculate_free_energy_mbar(energy, count, mask, bias = None):
     grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
 
     ## minimize loss using L-BFGS-B
-    print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
+    if verbose:
+        print("start loss: {:>7.5f}, start grad: {:>7.5f}".format(previous_loss, grad_max)) 
     for i in range(30):
         def closure():
             optimizer.zero_grad()
@@ -232,7 +233,10 @@ def calculate_free_energy_mbar(energy, count, mask, bias = None):
         optimizer.step(closure)
         loss = loss_model().item()
         grad_max = torch.max(torch.abs(loss_model.bias.grad)).item()
-        print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max))
+        
+        if verbose:
+            print("step: {:>4d}, loss:{:>7.5f}, grad: {:>7.5f}".format(i, loss, grad_max))
+            
         ## stop criterion for L-BFGS-B
         ## this is added because the optim.LBFGS often returns nan values
         ## when it runs too many iterations.
